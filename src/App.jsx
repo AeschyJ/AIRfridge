@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'; 
 import { initializeApp } from 'firebase/app';
 import { getAnalytics } from "firebase/analytics";
-import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
+import { initializeAppCheck, ReCaptchaV3Provider, getToken } from 'firebase/app-check';
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "firebase/ai";
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, addDoc, doc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, query, where, serverTimestamp, Timestamp, setDoc, orderBy as firestoreOrderBy } from 'firebase/firestore';
@@ -24,23 +24,38 @@ const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const ai = getAI(app, { backend: new GoogleAIBackend() });
 
+let appCheck;
 if (process.env.NODE_ENV !== 'production') {
-  // 在初始化 App Check 之前設定這個全局變數
-  self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
-  console.log('App Check Debug Mode Enabled'); // 可選：在 Console 中確認
-
-}
-
+  // DEBUG Provider 會在控制台印出一個 token，你需要將其註冊到 Firebase Console
+  // 確保你已經在 Console -> App Check 中添加並註冊了這個 Debug Token
+  self.FIREBASE_APPCHECK_DEBUG_TOKEN = true; // 這行很重要，告訴 SDK 啟用 Debug 模式
+  console.log("App Check Initialized with Debug Provider.");
 const recaptchaSiteKey = '6Lfz3UcrAAAAAIri2Rg2JC3ux0EErHhSmfxqsjgv';
-const appCheck = initializeAppCheck(app, {
-  provider: new ReCaptchaV3Provider(recaptchaSiteKey),
-  isTokenAutoRefreshEnabled: true // 如果需要自動刷新 Token
+appCheck = initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(recaptchaSiteKey),
+    isTokenAutoRefreshEnabled: true, // 啟用自動刷新 Token
 });
+    console.log('appCheck Initialized.');
+} else{
+const recaptchaSiteKey = '6Lfz3UcrAAAAAIri2Rg2JC3ux0EErHhSmfxqsjgv';
+appCheck = initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(recaptchaSiteKey),
+    isTokenAutoRefreshEnabled: true, // 啟用自動刷新 Token
+});
+    console.log('appCheck Initialized.');
+  }
+
+
+// const recaptchaSiteKey = '6Lfz3UcrAAAAAIri2Rg2JC3ux0EErHhSmfxqsjgv';
+//  = initializeAppCheck(app, {
+//   provider: new ReCaptchaV3Provider(recaptchaSiteKey),
+//   isTokenAutoRefreshEnabled: true // 如果需要自動刷新 Token
+// });
 
 
 // 獲取 App ID
+const ai = getAI(app, { backend: new GoogleAIBackend() });
 const appId = import.meta.env.VITE_APP_ID; // 從環境變數獲取
 
 // 翻譯文本
@@ -64,7 +79,7 @@ const translations = {
     aiRecipeButton: 'AI 食譜建議',
     customRecipeSettingsButtonTitle: '自訂食譜條件',
     purchaseDateDisplay: '購買日期',
-    quantityDisplay: '数量',
+    quantityDisplay: '數量',
     storageLocationDisplay: '建議位置',
     shelfLifeDaysDisplay: '預計可保存',
     actualExpiryDateDisplay: '預計過期日',
@@ -1409,54 +1424,37 @@ const App = () => {
     if (!isAuthReady || !userId) return;
     setIsLoadingAI(true);
     try {
+      // let appCheckTokenResponse;
+      // try {
+      //     appCheckTokenResponse = await getToken(appCheck, /* forceRefresh= */ false);
+      //     console.log(appCheckTokenResponse);
+      // } catch (err) {
+      //     // Handle any errors if the token was not retrieved.
+      //     return;
+      // }
       const languageName = currentLanguage === 'zh-TW' ? '繁體中文' : currentLanguage === 'en-US' ? 'English' : '日本語';
       const prompt = `針對食物「${item.name}」，建議最佳的${t('promptStorageLocation')}以及預估的${t('promptShelfLifeDays')}。${t('promptProvideInLanguage', {language: languageName})} 請以JSON格式回覆，包含 'storageLocation' (字串) 和 'shelfLifeDays' (整數) 兩個欄位。`;
       
-      // const payload = {
-      //   contents: [{ role: "user", parts: [{ text: prompt }] }],
-      //   generationConfig: {
-      //     responseMimeType: "application/json",
-      //     responseSchema: {
-      //       type: "OBJECT",
-      //       properties: {
-      //         storageLocation: { type: "STRING" },
-      //         shelfLifeDays: { type: "INTEGER" }
-      //       },
-      //       required: ["storageLocation", "shelfLifeDays"]
-      //     }
-      //   }
-      // };
-      // const apiKey = ""; 
-      // const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-      
-      // const response = await fetch(apiUrl, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(payload)
-      // });
-      const JSONSchema = Schema.object({
-        properties: {
-          storageLocation: Schema.string(),
-          shelfLifeDays: Schema.integer(),
-        }
-      })
       const model = getGenerativeModel(ai, {
         model: "gemini-2.5-flash-preview-05-20",
        })
       const response = await model.generateContent({
-           contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          thinkingConfig: {thinkingBudget: 0},
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "OBJECT",
-            properties: {
-              storageLocation: { type: "STRING" },
-              shelfLifeDays: { type: "INTEGER" }
-            },
-            required: ["storageLocation", "shelfLifeDays"]
+          //   headers: {
+          //     'X-Firebase-AppCheck': appCheckTokenResponse.token,
+          // },
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            thinkingConfig: {thinkingBudget: 0},
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                storageLocation: { type: "STRING" },
+                shelfLifeDays: { type: "INTEGER" }
+              },
+              required: ["storageLocation", "shelfLifeDays"]
+            }
           }
-        }
       })
 
       // if (!response.ok) {
@@ -1564,6 +1562,14 @@ const App = () => {
     }
     
     try {
+      // let appCheckTokenResponse;
+      //   try {
+      //       appCheckTokenResponse = await getToken(AppCheck, /* forceRefresh= */ false);
+      //   } catch (err) {
+      //     console.log('no appcheck');
+      //     return;
+      //   }
+
       const ingredientList = nonExpiredItems.map(item => item.name).join('、');
       const languageName = currentLanguage === 'zh-TW' ? '繁體中文' : currentLanguage === 'en-US' ? 'English' : '日本語';
       
