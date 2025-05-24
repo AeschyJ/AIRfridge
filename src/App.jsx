@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'; 
 import { initializeApp } from 'firebase/app';
 import { getAnalytics } from "firebase/analytics";
-import { getAI, getGenerativeModel, GoogleAIBackend } from "firebase/ai";
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
+import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "firebase/ai";
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, addDoc, doc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, query, where, serverTimestamp, Timestamp, setDoc, orderBy as firestoreOrderBy } from 'firebase/firestore';
 import { Edit3, Trash2, Brain, Utensils, PlusCircle, Save, XCircle, ChevronsUpDown, CalendarDays, Package, Thermometer, Clock, Info, ExternalLink, Sparkles, ShoppingCart, CookingPot, Settings, Palette, Languages, Moon, Sun, ListPlus, CheckSquare, AlertTriangle, Bell, SortAsc, SortDesc, ArrowDownUp, PlusSquare, ChevronDown, ChevronUp, History, CheckCircle2, Bookmark, Eye, X, Plus, Check, AlertCircle, SlidersHorizontal, RefreshCw } from 'lucide-react'; 
@@ -24,7 +25,20 @@ const analytics = getAnalytics(app);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const ai = getAI(app, { backend: new GoogleAIBackend() });
-const model = getGenerativeModel(ai, { model: "gemini-2.5-flash-preview-05-20" });
+
+if (process.env.NODE_ENV !== 'production') {
+  // 在初始化 App Check 之前設定這個全局變數
+  self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+  console.log('App Check Debug Mode Enabled'); // 可選：在 Console 中確認
+
+}
+
+const recaptchaSiteKey = '6Lfz3UcrAAAAAIri2Rg2JC3ux0EErHhSmfxqsjgv';
+const appCheck = initializeAppCheck(app, {
+  provider: new ReCaptchaV3Provider(recaptchaSiteKey),
+  isTokenAutoRefreshEnabled: true // 如果需要自動刷新 Token
+});
+
 
 // 獲取 App ID
 const appId = import.meta.env.VITE_APP_ID; // 從環境變數獲取
@@ -1420,9 +1434,19 @@ const App = () => {
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(payload)
       // });
+      const JSONSchema = Schema.object({
+        properties: {
+          storageLocation: Schema.string(),
+          shelfLifeDays: Schema.integer(),
+        }
+      })
       const model = getGenerativeModel(ai, {
         model: "gemini-2.5-flash-preview-05-20",
+       })
+      const response = await model.generateContent({
+           contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
+          thinkingConfig: {thinkingBudget: 0},
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
@@ -1434,18 +1458,18 @@ const App = () => {
           }
         }
       })
-      let response = await model.generateContent(prompt)
 
-      if (!response.ok) {
-        let errorDetailMessage = response.statusText;
-        try { const errorData = await response.json(); errorDetailMessage = errorData?.error?.message || JSON.stringify(errorData); } 
-        catch (e) { try { errorDetailMessage = await response.text(); } catch (textE) { /* Fallback */ } }
-        console.error(`AI 儲存建議 API 錯誤 (${response.status}):`, errorDetailMessage, response);
-        throw new Error(`${t('errorGetAIAdvice')} (HTTP ${response.status}) - ${errorDetailMessage}`);
-      }
-      const result = await response.json();
+      // if (!response.ok) {
+      //   let errorDetailMessage = response.statusText;
+      //   try { const errorData = await response.json(); errorDetailMessage = errorData?.error?.message || JSON.stringify(errorData); } 
+      //   catch (e) { try { errorDetailMessage = await response.text(); } catch (textE) { /* Fallback */ } }
+      //   console.error(`AI 儲存建議 API 錯誤 (${response.status}):`, errorDetailMessage, response);
+      //   throw new Error(`${t('errorGetAIAdvice')} (HTTP ${response.status}) - ${errorDetailMessage}`);
+      // }
+      const result = response.response;
       if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
-        const advice = JSON.parse(result.candidates[0].content.parts[0].text);
+        // const advice = JSON.parse(result.response?.candidates[0].content.parts[0].text);
+        const advice = JSON.parse(result.candidates?.[0]?.content?.parts?.[0]?.text)
         const itemDocRef = doc(db, `artifacts/${appId}/users/${userId}/fridgeItems`, item.id);
         await updateDoc(itemDocRef, {
           storageLocation: advice.storageLocation,
@@ -1572,9 +1596,40 @@ const App = () => {
 
       prompt += `每道食譜請包含${t('promptRecipeName')} ('recipeName': STRING)、${t('promptIngredients')} ('ingredients': ARRAY of STRING)、以及詳細的${t('promptSteps')} ('steps': ARRAY of STRING)。${t('promptProvideInLanguage', {language: languageName})} 請以JSON格式回覆一個包含食譜陣列的物件，根物件鍵名為 'recipes'。`;
 
-      const payload = {
+      // const payload = {
+      //   contents: [{ role: "user", parts: [{ text: prompt }] }],
+      //   generationConfig: {
+      //     responseMimeType: "application/json",
+      //     responseSchema: {
+      //       type: "OBJECT",
+      //       properties: {
+      //         recipes: {
+      //           type: "ARRAY",
+      //           items: {
+      //             type: "OBJECT",
+      //             properties: {
+      //               recipeName: { type: "STRING" },
+      //               ingredients: { type: "ARRAY", items: { type: "STRING" } },
+      //               steps: { type: "ARRAY", items: { type: "STRING" } }
+      //             },
+      //             required: ["recipeName", "ingredients", "steps"]
+      //           }
+      //         }
+      //       },
+      //       required: ["recipes"]
+      //     }
+      //   }
+      // };
+      // const apiKey = "";
+      // const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+      
+      const model = getGenerativeModel(ai, {
+        model: "gemini-2.5-flash-preview-05-20",
+        })
+      const response = await model.generateContent({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
+          thinkingConfig: {thinkingBudget: 0},
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
@@ -1595,49 +1650,21 @@ const App = () => {
             required: ["recipes"]
           }
         }
-      };
-      // const apiKey = "";
-      // const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-      
-      const model = getGenerativeModel(ai, {
-        model: "gemini-2.5-flash-preview-05-20",
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "OBJECT",
-            properties: {
-              recipes: {
-                type: "ARRAY",
-                items: {
-                  type: "OBJECT",
-                  properties: {
-                    recipeName: { type: "STRING" },
-                    ingredients: { type: "ARRAY", items: { type: "STRING" } },
-                    steps: { type: "ARRAY", items: { type: "STRING" } }
-                  },
-                  required: ["recipeName", "ingredients", "steps"]
-                }
-              }
-            },
-            required: ["storageLocation", "shelfLifeDays"]
-          }
-        }
       })
-      let response = await model.generateContent(prompt)
 
       // const response = await fetch(apiUrl, {
       //   method: 'POST',
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(payload)
       // });
-      if (!response.ok) {
-        let errorDetailMessage = response.statusText;
-        try { const errorData = await response.json(); errorDetailMessage = errorData?.error?.message || JSON.stringify(errorData); } 
-        catch (e) { try { errorDetailMessage = await response.text(); } catch (textE) { /* Fallback */ } }
-        console.error(`AI 食譜 API 錯誤 (${response.status}):`, errorDetailMessage, response);
-        throw new Error(`${t('errorGetAIRecipes')} (HTTP ${response.status}) - ${errorDetailMessage}`);
-      }
-      const result = await response.json();
+      // if (!response.ok) {
+      //   let errorDetailMessage = response.statusText;
+      //   try { const errorData = await response.json(); errorDetailMessage = errorData?.error?.message || JSON.stringify(errorData); } 
+      //   catch (e) { try { errorDetailMessage = await response.text(); } catch (textE) { /* Fallback */ } }
+      //   console.error(`AI 食譜 API 錯誤 (${response.status}):`, errorDetailMessage, response);
+      //   throw new Error(`${t('errorGetAIRecipes')} (HTTP ${response.status}) - ${errorDetailMessage}`);
+      // }
+      const result = response.response;
       if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
         const parsedResult = JSON.parse(result.candidates[0].content.parts[0].text);
         if (parsedResult.recipes && parsedResult.recipes.length > 0) {
